@@ -1,0 +1,6 @@
+behave==1.2.6
+requests==2.32.3
+jsonpath-ng==1.6.0
+langgraph==0.2.35
+langchain==0.2.12
+pydantic==2.8.2
