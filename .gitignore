@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.build/
+.dist/
+
+# Environments
+.venv/
+.env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs and reports
+logs/
+**/reports/
+
+# Generated BDD artifacts
+telecom_api_bdd/
+
+# OS
+.DS_Store
