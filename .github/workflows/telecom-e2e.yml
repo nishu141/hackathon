@@ -1,0 +1,50 @@
+name: Telecom LangGraph E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_story:
+        description: "User story to generate and execute tests"
+        required: false
+        default: "As a telecom user, I want to verify mobile data usage API"
+  push:
+    paths:
+      - '**/*.py'
+      - 'requirements.txt'
+      - 'telecom_config.json'
+      - '.github/workflows/**'
+
+jobs:
+  run-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute workflow
+        env:
+          USER_STORY: ${{ github.event.inputs.user_story }}
+        run: |
+          STORY="${USER_STORY:-As a telecom user, I want to verify mobile data usage API}"
+          python telecom_ai_langgraph.py "$STORY" --config telecom_config.json --output-dir telecom_api_bdd
+
+      - name: Upload BDD artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-artifacts
+          path: |
+            telecom_api_bdd/features
+            telecom_api_bdd/step_definitions
+            telecom_api_bdd/support
+            telecom_api_bdd/reports
+          if-no-files-found: warn
