@@ -8,4 +8,5 @@ class RuntimeSelfHealAgent:
         success = await orchestrator.self_heal_runtime_error(details)
         state["runtime_healed"] = success
         state["healing_attempts"] = state.get("healing_attempts", 0) + 1
+        state["last_healed_error"] = state.get("error_type", "")
         return state

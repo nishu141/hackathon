@@ -1,6 +1,24 @@
+# Core dependencies for telecom AI LangGraph application
 behave==1.2.6
 requests==2.32.3
 jsonpath-ng==1.6.0
+
+# LangGraph and LangChain dependencies
 langgraph==0.2.35
 langchain==0.2.12
+langchain-core==0.3.25
+langchain-community==0.3.25
+
+# Data validation and serialization
 pydantic==2.8.2
+
+# Async support
+aiofiles==24.1.0
+
+# Additional utilities
+python-dotenv==1.0.1
+typing-extensions==4.12.2
+
+# Development and testing (optional but recommended)
+pytest==8.2.2
+pytest-asyncio==0.24.0

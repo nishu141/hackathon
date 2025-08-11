@@ -9,7 +9,66 @@ import traceback
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
+# Auto-dependency installer
+def check_and_install_dependencies():
+    """Check for missing dependencies and install them automatically."""
+    required_packages = [
+        'langgraph', 'langchain', 'langchain_core', 'langchain_community',
+        'behave', 'requests', 'jsonpath_ng', 'pydantic', 'aiofiles',
+        'python_dotenv', 'typing_extensions'
+    ]
+
+    missing_packages = []
+    for package in required_packages:
+        try:
+            __import__(package)
+        except ImportError:
+            missing_packages.append(package)
+
+    if missing_packages:
+        print(f"🔧 Missing packages detected: {', '.join(missing_packages)}")
+        print("Installing missing dependencies...")
+
+        try:
+            import subprocess
+            for package in missing_packages:
+                package_map = {
+                    'langgraph': 'langgraph==0.2.35',
+                    'langchain': 'langchain==0.2.12',
+                    'langchain_core': 'langchain-core==0.3.25',
+                    'langchain_community': 'langchain-community==0.3.25',
+                    'behave': 'behave==1.2.6',
+                    'requests': 'requests==2.32.3',
+                    'jsonpath_ng': 'jsonpath-ng==1.6.0',
+                    'pydantic': 'pydantic==2.8.2',
+                    'aiofiles': 'aiofiles==24.1.0',
+                    'python_dotenv': 'python-dotenv==1.0.1',
+                    'typing_extensions': 'typing-extensions==4.12.2'
+                }
+
+                install_cmd = package_map.get(package, package)
+                print(f"Installing {install_cmd}...")
+
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", install_cmd],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                print(f"✓ Successfully installed {package}")
+
+        except Exception as e:
+            print(f"❌ Failed to install dependencies automatically: {e}")
+            print("Please run: pip install -r requirements.txt")
+            sys.exit(1)
+
+        print("✅ Dependencies installed successfully!")
+
+# Run dependency check before imports
+check_and_install_dependencies()
+
 from langgraph.graph import StateGraph, END
+from langgraph.errors import GraphRecursionError
 from state import AgentState
 
 from agents.framework_init import FrameworkInitAgent
@@ -45,7 +104,10 @@ def create_default_config(config_path: str):
             },
         }
     }
-    os.makedirs(os.path.dirname(config_path) or ".", exist_ok=True)
+    # Handle relative paths properly
+    config_dir = os.path.dirname(config_path)
+    if config_dir and config_dir != ".":
+        os.makedirs(config_dir, exist_ok=True)
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     logger.info("Created default config at: %s", config_path)
@@ -59,11 +121,12 @@ def parse_arguments():
         default="As a telecom user, I want to verify mobile data usage API",
         help="User story describing test scenario",
     )
-    parser.add_argument("--config", default="/workspace/telecom_config.json")
+    parser.add_argument("--config", default="./telecom_config.json")
     parser.add_argument("--max-healing", type=int, default=3)
     parser.add_argument("--disable-auto-healing", action="store_true")
-    parser.add_argument("--output-dir", default="/workspace/telecom_api_bdd")
+    parser.add_argument("--output-dir", default="./telecom_api_bdd")
     parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--recursion-limit", type=int, default=15, help="Max graph recursion before aborting")
     args = parser.parse_args()
     if not os.path.exists(args.config):
         create_default_config(args.config)
@@ -193,11 +256,46 @@ def create_workflow():
 
     def after_test_exec(state: AgentState) -> str:
         results = state.get("scenario_results", [])
+        
+        # Check for critical failures that should stop execution
+        if results:
+            critical_failures = [r for r in results if not r.get("passed", True) and 
+                               r.get("error_type") in ["SyntaxError", "ImportError", "FileSystemError", "ValidationError"]]
+            if critical_failures:
+                print(f"🚨 Critical failures detected: {len(critical_failures)}")
+                return "validation"  # Go to validation to determine exit
+            
+            # Check for assertion failures that should trigger self-healing
+            assertion_failures = [r for r in results if not r.get("passed", True) and 
+                                r.get("error_type") == "AssertionError"]
+            if assertion_failures:
+                print(f"⚠️ Assertion failures detected: {len(assertion_failures)} - triggering self-healing")
+                return "diagnostic"  # Go to diagnostic to trigger self-healing
+        
+        # Normal flow: all passed or non-critical failures
         if results and all(r.get("passed", True) for r in results):
             return "validation"
-        if state.get("enable_auto_healing", True) and state.get("healing_attempts", 0) < state.get("max_healing_attempts", 3):
+        max_heal = state.get("max_healing_attempts", 3)
+        attempts = state.get("healing_attempts", 0)
+        if state.get("enable_auto_healing", True) and attempts < max_heal:
+            # Check if we've already tried to heal this specific error multiple times
+            current_error = state.get("error_type", "")
+            last_healed_error = state.get("last_healed_error", "")
+            healing_attempts = attempts
+            
+            if current_error == last_healed_error and healing_attempts >= 2:
+                print(f"⚠️ Same error '{current_error}' persists after {healing_attempts} healing attempts. Escalating to human review.")
+                return "human_review"
+            
+            # Check if we've been stuck in a loop with assertion failures
+            if current_error == "AssertionError" and healing_attempts >= 2:
+                print(f"⚠️ Multiple assertion failures detected after {healing_attempts} attempts. Escalating to human review.")
+                return "human_review"
+            
+            # One more healing attempt allowed
             return "diagnostic"
-        return "human_review"
+        # Exceeded max healing attempts: finalize and validate to set exit code, then report
+        return "validation"
 
     def after_diagnostic(state: AgentState) -> str:
         et = state.get("error_type", "")
@@ -205,7 +303,7 @@ def create_workflow():
             return "human_review"
         if "Syntax" in et or "Indentation" in et or "Import" in et:
             return "syntax_selfheal"
-        if "Runtime" in et or "Name" in et:
+        if "Runtime" in et or "Name" in et or "Assertion" in et:
             return "runtime_selfheal"
         return "human_review"
 
@@ -230,10 +328,11 @@ def create_workflow():
     return graph.compile()
 
 
-async def run_main_workflow(initial_state: AgentState):
+async def run_main_workflow(initial_state: AgentState, recursion_limit: int = 15):
     workflow = create_workflow()
     logger.info("Starting test automation workflow")
-    state = await workflow.ainvoke(initial_state)
+    # Pass recursion limit to the app to prevent deep cycles
+    state = await workflow.ainvoke(initial_state, config={"recursion_limit": recursion_limit})
     if state.get("scenario_results"):
         try:
             report_path = await state["orchestrator"].generate_report(state["scenario_results"])
@@ -263,12 +362,29 @@ if __name__ == "__main__":
     exit_code = 0
     try:
         initial_state = create_initial_state(args)
-        final_state = loop.run_until_complete(asyncio.wait_for(run_main_workflow(initial_state), timeout=600))
-        if final_state.get("scenario_results"):
+        final_state = loop.run_until_complete(asyncio.wait_for(run_main_workflow(initial_state, recursion_limit=args.recursion_limit), timeout=600))
+        
+        # Check for critical failures
+        if final_state.get("critical_failure", False):
+            exit_code = final_state.get("exit_code", 1)
+            print(f"🚨 Critical failure detected. Exiting with code: {exit_code}")
+        elif final_state.get("scenario_results"):
             failures = [r for r in final_state["scenario_results"] if not r.get("passed", True)]
             exit_code = 0 if not failures else 1
+            if failures:
+                print(f"⚠️ {len(failures)} test failures detected")
         else:
             exit_code = 1
+            print("❌ No test results generated")
+    except GraphRecursionError as e:
+        # Friendly message + non-zero exit code
+        msg = (
+            f"❌ Workflow aborted due to excessive graph recursion (limit {args.recursion_limit}).\n"
+            "Tip: Reduce auto-healing loops or run with --recursion-limit N to raise the limit."
+        )
+        print(msg)
+        logger.error("Graph recursion limit reached: %s", str(e))
+        exit_code = 2
     except asyncio.TimeoutError:
         logger.error("Workflow timed out")
         exit_code = 3
