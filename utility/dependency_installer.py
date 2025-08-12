@@ -23,7 +23,7 @@ class DependencyInstaller:
             'jsonpath_ng': 'jsonpath-ng==1.6.0',
             'pydantic': 'pydantic==2.8.2',
             'aiofiles': 'aiofiles==24.1.0',
-            'python_dotenv': 'python-dotenv==1.0.1',
+            'dotenv': 'python-dotenv==1.0.1',
             'typing_extensions': 'typing-extensions==4.12.2'
         }
         

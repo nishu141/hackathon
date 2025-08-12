@@ -27,10 +27,20 @@ if not exist "telecom_ai_langgraph.py" (
 echo ✓ Project files found
 echo.
 
-REM Run the Python launcher
+REM Set default user story if not provided
+set USER_STORY_ARG=
+set ARGS=%*
+
+REM Check if --user-story is present in arguments
+ echo %ARGS% | findstr /I "--user-story" >nul
+if errorlevel 1 (
+    set USER_STORY_ARG=--user-story "As a telecom user, I want to verify mobile data usage API"
+)
+
+REM Run the Python launcher with user story
 echo 🔧 Starting dependency management and application...
 echo.
-python run_telecom_ai.py
+python run_telecom_ai.py %* %USER_STORY_ARG%
 
 if errorlevel 1 (
     echo.

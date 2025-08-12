@@ -1,11 +1,18 @@
 import os
 import re
 import json
+import asyncio
+import logging
 from typing import Dict, Any, List
 from datetime import datetime
+from .base_agent import BaseAgent
 
 
-class TestExecAgent:
+class TestExecAgent(BaseAgent):
+    def __init__(self):
+        super().__init__()
+        self.logger = logging.getLogger(__name__)
+
     def _parse_behave_output(self, output: str, return_code: int) -> List[Dict[str, Any]]:
         """Parse behave output to extract detailed scenario results."""
         results: List[Dict[str, Any]] = []
@@ -88,8 +95,8 @@ class TestExecAgent:
                     current_scenario["error_details"] = line
                     # Mark the last step as failed
                     if current_scenario["steps"]:
-                        current_scenario["steps"][-1]["status"] = "failed"
-                        current_scenario["steps"][-1]["details"] = line
+                        current_scenario["steps"][ -1 ]["status"] = "failed"
+                        current_scenario["steps"][ -1 ]["details"] = line
             
             # Detect other errors
             elif "ERROR:" in line or "FAILED:" in line:
@@ -164,89 +171,119 @@ class TestExecAgent:
         
         return validation_result
 
+    def _analyze_test_failures(self, output: str) -> Dict[str, Any]:
+        """Analyze test output to determine failure patterns and healing strategies"""
+        output_lower = output.lower()
+        
+        # Check for specific error types
+        if "ambiguousstep" in output_lower or "ambiguous step" in output_lower:
+            return {
+                "needs_healing": True,
+                "recommended_healing": "ambiguous_step_repair",
+                "failure_type": "ambiguous_step",
+                "critical_issues": ["Duplicate step definitions detected"],
+                "recommendations": ["Clean up old step definition files", "Regenerate step definitions"]
+            }
+        elif "syntaxerror" in output_lower or "syntax error" in output_lower:
+            return {
+                "needs_healing": True,
+                "recommended_healing": "syntax_repair",
+                "failure_type": "syntax",
+                "critical_issues": ["Generated code has syntax errors"],
+                "recommendations": ["Regenerate feature and step definitions", "Validate code syntax"]
+            }
+        elif "importerror" in output_lower or "module not found" in output_lower:
+            return {
+                "needs_healing": True,
+                "recommended_healing": "import_repair",
+                "failure_type": "import",
+                "critical_issues": ["Required modules not available"],
+                "recommendations": ["Install missing dependencies", "Check import paths"]
+            }
+        elif "assertionerror" in output_lower or "assertion failed" in output_lower:
+            return {
+                "needs_healing": True,
+                "recommended_healing": "assertion_repair",
+                "failure_type": "assertion",
+                "critical_issues": ["Test assertions are failing"],
+                "recommendations": ["Review test logic", "Update step definitions"]
+            }
+        elif "timeout" in output_lower or "timed out" in output_lower:
+            return {
+                "needs_healing": True,
+                "recommended_healing": "timeout_repair",
+                "failure_type": "timeout",
+                "critical_issues": ["Test execution is timing out"],
+                "recommendations": ["Increase timeout limits", "Check system performance"]
+            }
+        elif "max retries" in output_lower or "retry limit" in output_lower:
+            return {
+                "needs_healing": False,
+                "recommended_healing": None,
+                "failure_type": "retry_limit_exceeded",
+                "critical_issues": ["Self-healing retry limit reached"],
+                "recommendations": ["Manual intervention required", "Review system configuration"]
+            }
+        else:
+            return {
+                "needs_healing": True,
+                "recommended_healing": "generic_repair",
+                "failure_type": "unknown",
+                "critical_issues": ["Unknown failure pattern"],
+                "recommendations": ["Generic repair attempt", "Review logs for details"]
+            }
+
     async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute tests with robust error handling and validation."""
-        print("🧪 TestExecAgent: Starting test execution...")
+        """Execute tests and report initial results"""
+        self.logger.info("🚀 TestExecAgent: Starting test execution")
         
-        # Validate test environment first
-        validation = self._validate_test_environment(state)
-        if not validation["valid"]:
-            print(f"❌ TestExecAgent: Environment validation failed: {validation['issues']}")
-            state["test_executed"] = False
-            state["test_passed"] = False
-            state["test_exec_result"] = f"Environment validation failed: {validation['issues']}"
-            state["scenario_results"] = [{
-                "scenario": "Environment Validation",
-                "passed": False,
-                "error_type": "ValidationError",
-                "error_details": f"Test environment issues: {', '.join(validation['issues'])}",
-                "timestamp": datetime.now().isoformat()
-            }]
-            state["needs_self_heal"] = True
-            return state
-        
-        if validation["warnings"]:
-            print(f"⚠️ TestExecAgent: Environment warnings: {validation['warnings']}")
-        
-        # Execute tests
         orchestrator = state["orchestrator"]
-        feature_path = state.get("feature_path", "")
+        feature_path = state.get("feature_path")
         
-        print(f"🧪 TestExecAgent: Executing tests from: {feature_path}")
+        if not feature_path:
+            self.logger.error("❌ No feature path provided for test execution")
+            state["test_execution_status"] = "failed"
+            state["test_execution_error"] = "No feature path available"
+            return state
         
         try:
-            ok, output = await orchestrator.execute_test(feature_path)
-            print(f"🧪 TestExecAgent: Test execution completed. Success: {ok}")
+            # Execute test with retry limit
+            success, output = await orchestrator.execute_test(feature_path)
             
-            # Parse the output for detailed results
-            scenario_results = self._parse_behave_output(output, 0 if ok else 1)
+            # Always store raw output
+            state["test_output"] = output
             
-            # Update state
-            state["test_executed"] = True
-            state["test_exec_result"] = output
+            # Parse scenario results from output (best-effort)
+            scenario_results = self._parse_behave_output(output, 0 if success else 1)
             state["scenario_results"] = scenario_results
             
-            # Determine overall test status
-            if scenario_results:
-                all_passed = all(result.get("passed", False) for result in scenario_results)
-                state["test_passed"] = all_passed
-                
-                # Check if self-healing is needed
-                failed_scenarios = [r for r in scenario_results if not r.get("passed", True)]
-                if failed_scenarios:
-                    state["needs_self_heal"] = True
-                    state["healing_attempts"] = state.get("healing_attempts", 0) + 1
-                    
-                    # Log detailed failure information
-                    print(f"❌ TestExecAgent: {len(failed_scenarios)} scenarios failed:")
-                    for scenario in failed_scenarios:
-                        print(f"  - {scenario['scenario']}: {scenario.get('error_details', 'Unknown error')}")
-                else:
-                    print("✅ TestExecAgent: All scenarios passed successfully!")
+            if success:
+                self.logger.info("✅ Test execution completed successfully")
+                state["test_execution_status"] = "success"
+                state["healing_type"] = None
             else:
-                state["test_passed"] = False
-                state["needs_self_heal"] = True
-                print("❌ TestExecAgent: No test results generated")
-            
-            return state
-            
+                self.logger.warning("⚠️ Test execution failed, analyzing failures...")
+                state["test_execution_status"] = "failed"
+                
+                # Analyze failures to determine healing strategy
+                failure_analysis = self._analyze_test_failures(output)
+                state["failure_analysis"] = failure_analysis
+                
+                # Set healing type based on analysis
+                if failure_analysis["needs_healing"]:
+                    state["healing_type"] = failure_analysis["recommended_healing"]
+                    self.logger.info(f"🔧 Recommended healing: {failure_analysis['recommended_healing']}")
+                    
+                    if failure_analysis["critical_issues"]:
+                        self.logger.error(f"🚨 Critical issues detected: {failure_analysis['critical_issues']}")
+                else:
+                    state["healing_type"] = None
+                    self.logger.info("ℹ️ No healing required or healing not possible")
+                
         except Exception as e:
-            print(f"❌ TestExecAgent: Test execution failed with exception: {str(e)}")
-            import traceback
-            error_details = traceback.format_exc()
-            
-            state["test_executed"] = False
-            state["test_passed"] = False
-            state["test_exec_result"] = f"Test execution exception: {str(e)}\n{error_details}"
-            state["scenario_results"] = [{
-                "scenario": "Test Execution",
-                "passed": False,
-                "error_type": "ExecutionException",
-                "error_details": str(e),
-                "traceback": error_details,
-                "timestamp": datetime.now().isoformat()
-            }]
-            state["needs_self_heal"] = True
-            state["healing_attempts"] = state.get("healing_attempts", 0) + 1
-            
-            return state
+            self.logger.error(f"💥 Test execution error: {e}")
+            state["test_execution_status"] = "error"
+            state["test_execution_error"] = str(e)
+            state["healing_type"] = "generic_repair"
+        
+        return state

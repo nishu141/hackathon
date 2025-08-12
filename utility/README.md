@@ -39,17 +39,19 @@ python telecom_ai_langgraph.py "As a telecom user, I want to verify mobile data 
 
 ## 📁 Project Structure
 
-```
-hackathon-1/
-├── telecom_ai_langgraph.py      # Main application
-├── run_telecom_ai.py            # Python launcher with dependency management
-├── run_telecom_ai.bat           # Windows batch launcher
-├── dependency_installer.py      # Automatic dependency installer
-├── requirements.txt              # Python dependencies
-├── agents/                      # AI agents for different tasks
-├── telecom_config.json          # API configuration
-└── README.md                    # This file
-```
+- `telecom_ai_langgraph.py` — Main entry point (remains in project root)
+- `utility/` — Contains all supporting modules and files:
+    - `agents/` — All agent modules
+    - `telecom_test_orchestrator.py` — Orchestrator logic
+    - `state.py` — State management
+    - `logging_config.py` — Logging setup
+    - `dependency_installer.py` — Dependency management
+    - `test_framework_creation.py` — (if used)
+    - `README.md` — Project documentation
+    - `requirements.txt` — Python dependencies
+    - `run_telecom_ai.bat` — Windows launcher
+    - `run_telecom_ai.py` — Python launcher
+    - `telecom_config.json` — API/configuration file
 
 ## 🎯 Features
 
@@ -97,3 +99,23 @@ When everything works, you'll see:
 ```
 
 The application will automatically generate BDD tests, execute them, and provide detailed reports!
+
+## HTML Report Generation
+
+After each test run, an HTML report will be generated automatically using the Behave HTML Formatter. You can find the report at `./telecom_api_bdd/report.html` (or your specified output directory).
+
+## Passing User Story
+
+You can pass a custom user story to be used for feature generation by adding the `--user-story` argument to your run command. For example:
+
+```
+python telecom_ai_langgraph.py --user-story "As a telecom admin, I want to verify the billing API."
+```
+
+Or using the launcher script:
+
+```
+python run_telecom_ai.py --user-story "As a telecom admin, I want to verify the billing API."
+```
+
+The user story will be included in the generated feature files and reports.

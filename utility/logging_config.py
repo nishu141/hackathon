@@ -18,7 +18,7 @@ def setup_logger(name: str = "telecom") -> logging.Logger:
     console.setFormatter(formatter)
     logger.addHandler(console)
 
-    log_file = os.getenv("LOG_FILE", "/workspace/logs/execution.log")
+    log_file = os.getenv("LOG_FILE", os.path.join(".", "logs", "execution.log"))
     try:
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         file_handler = logging.FileHandler(log_file, encoding="utf-8")

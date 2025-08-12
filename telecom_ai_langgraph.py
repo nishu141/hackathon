@@ -15,7 +15,7 @@ def check_and_install_dependencies():
     required_packages = [
         'langgraph', 'langchain', 'langchain_core', 'langchain_community',
         'behave', 'requests', 'jsonpath_ng', 'pydantic', 'aiofiles',
-        'python_dotenv', 'typing_extensions'
+        'dotenv', 'typing_extensions'
     ]
 
     missing_packages = []
@@ -42,7 +42,7 @@ def check_and_install_dependencies():
                     'jsonpath_ng': 'jsonpath-ng==1.6.0',
                     'pydantic': 'pydantic==2.8.2',
                     'aiofiles': 'aiofiles==24.1.0',
-                    'python_dotenv': 'python-dotenv==1.0.1',
+                    'dotenv': 'python-dotenv==1.0.1',
                     'typing_extensions': 'typing-extensions==4.12.2'
                 }
 
@@ -59,7 +59,7 @@ def check_and_install_dependencies():
 
         except Exception as e:
             print(f"❌ Failed to install dependencies automatically: {e}")
-            print("Please run: pip install -r requirements.txt")
+            print("Please run: pip install -r utility/requirements.txt")
             sys.exit(1)
 
         print("✅ Dependencies installed successfully!")
@@ -69,20 +69,21 @@ check_and_install_dependencies()
 
 from langgraph.graph import StateGraph, END
 from langgraph.errors import GraphRecursionError
-from state import AgentState
+# Update imports to use utility package
+from utility.state import AgentState
 
-from agents.framework_init import FrameworkInitAgent
-from agents.content_gen import ContentGenAgent
-from agents.test_exec import TestExecAgent
-from agents.diagnostic import DiagnosticAgent
-from agents.syntax_selfheal import SyntaxSelfHealAgent
-from agents.runtime_selfheal import RuntimeSelfHealAgent
-from agents.validation import ValidationAgent
-from agents.report import ReportAgent
-from agents.human_review import HumanReviewAgent
+from utility.agents.framework_init import FrameworkInitAgent
+from utility.agents.content_gen import ContentGenAgent
+from utility.agents.test_exec import TestExecAgent
+from utility.agents.diagnostic import DiagnosticAgent
+from utility.agents.syntax_selfheal import SyntaxSelfHealAgent
+from utility.agents.runtime_selfheal import RuntimeSelfHealAgent
+from utility.agents.validation import ValidationAgent
+from utility.agents.report import ReportAgent
+from utility.agents.human_review import HumanReviewAgent
 
-from logging_config import setup_logger
-from telecom_test_orchestrator import TelecomTestOrchestrator
+from utility.logging_config import setup_logger
+from utility.telecom_test_orchestrator import TelecomTestOrchestrator
 
 logger = setup_logger()
 
@@ -119,54 +120,35 @@ def parse_arguments():
         "user_story",
         nargs="?",
         default="As a telecom user, I want to verify mobile data usage API",
-        help="User story describing test scenario",
+        help="User story describing test scenario (deprecated, use --user-story instead)",
     )
-    parser.add_argument("--config", default="./telecom_config.json")
-    parser.add_argument("--max-healing", type=int, default=3)
+    parser.add_argument("--config", default="utility/telecom_config.json")
+    parser.add_argument("--max-healing", type=int, default=5)
     parser.add_argument("--disable-auto-healing", action="store_true")
     parser.add_argument("--output-dir", default="./telecom_api_bdd")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--recursion-limit", type=int, default=15, help="Max graph recursion before aborting")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop on first failure, skip self-heal")
+    parser.add_argument("--user-story", type=str, dest="user_story_flag", help="User story for feature generation (overrides positional argument)")
     args = parser.parse_args()
+    
+    # Use --user-story if provided, otherwise fall back to positional argument
+    if args.user_story_flag is not None:
+        args.user_story = args.user_story_flag
+    
     if not os.path.exists(args.config):
         create_default_config(args.config)
     return args
 
 
-class ExtendedOrchestrator(TelecomTestOrchestrator):
-    def __init__(self, output_dir: str, config_path: str, debug: bool = False,
-                 max_healing_attempts: int = 3, enable_auto_healing: bool = True):
-        super().__init__(output_dir, config_path, debug)
-        self.max_healing_attempts = max_healing_attempts
-        self.enable_auto_healing = enable_auto_healing
-        self.healing_log: List[Dict[str, Any]] = []
-
-    async def generate_report(self, scenario_results):
-        report_path = os.path.join(self.output_dir, f"test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-        total = len(scenario_results) if scenario_results else 0
-        passed = len([r for r in scenario_results if r.get("passed", True)]) if scenario_results else 0
-        data = {
-            "summary": {
-                "total": total,
-                "passed": passed,
-                "failed": total - passed,
-                "success_rate": round((passed / total) * 100, 2) if total else 0,
-            },
-            "scenarios": scenario_results or [],
-        }
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        logger.info("Generated JSON report: %s", report_path)
-        return report_path
-
-
 def create_initial_state(args: argparse.Namespace) -> AgentState:
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    enable_auto_healing = not args.disable_auto_healing
-    orchestrator = ExtendedOrchestrator(
+    enable_auto_healing = (not args.disable_auto_healing) and (not args.fail_fast)
+    orchestrator = TelecomTestOrchestrator(
         output_dir=output_dir,
         config_path=args.config,
+        user_story=args.user_story,
         debug=args.verbose,
         max_healing_attempts=args.max_healing,
         enable_auto_healing=enable_auto_healing,
@@ -199,6 +181,7 @@ def create_initial_state(args: argparse.Namespace) -> AgentState:
         "error_specifics": {},
         "max_healing_attempts": args.max_healing,
         "enable_auto_healing": enable_auto_healing,
+        "fail_fast": args.fail_fast,
         "test_exec_result": "",
     }
 
@@ -335,8 +318,17 @@ async def run_main_workflow(initial_state: AgentState, recursion_limit: int = 15
     state = await workflow.ainvoke(initial_state, config={"recursion_limit": recursion_limit})
     if state.get("scenario_results"):
         try:
-            report_path = await state["orchestrator"].generate_report(state["scenario_results"])
-            logger.info("Report: %s", report_path)
+            report_json = await state["orchestrator"].generate_report(state["scenario_results"])
+            # The base orchestrator also wrote an MD report; compute likely path
+            reports_dir = os.path.join(state["orchestrator"].output_dir, "reports")
+            md_candidates = [p for p in os.listdir(reports_dir) if p.endswith('.md')]
+            md_candidates.sort(reverse=True)
+            report_md = os.path.join(reports_dir, md_candidates[0]) if md_candidates else ""
+            state["report_path_json"] = report_json
+            state["report_path_md"] = report_md
+            logger.info("Report JSON: %s", report_json)
+            if report_md:
+                logger.info("Report MD: %s", report_md)
         except Exception as e:
             logger.error("Report generation failed: %s", str(e))
     return state

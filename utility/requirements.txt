@@ -22,3 +22,4 @@ typing-extensions==4.12.2
 # Development and testing (optional but recommended)
 pytest==8.2.2
 pytest-asyncio==0.24.0
+behave-html-formatter==1.4.0
