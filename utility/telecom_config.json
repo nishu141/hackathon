@@ -1,16 +1,10 @@
 {
   "api": {
-    "name": "ReqRes Demo API",
+    "name": "Reqres Sample API",
     "base_url": "https://reqres.in/api",
-    "description": "Public API for testing",
-    "endpoints": {
-      "user": "/users/{user_id}",
-      "resource": "/unknown/{resource_id}"
-    },
     "parameters": {
-      "valid_user_id": "2",
-      "invalid_user_id": "23",
-      "valid_resource_id": "2"
+      "user_id": 2,
+      "invalid_user_id": 23
     }
   }
 }

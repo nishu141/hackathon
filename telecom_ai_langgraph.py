@@ -1,29 +1,78 @@
 # telecom_ai_langgraph.py
-import asyncio
-import os
-import json
 import argparse
-import logging
+import os
 import sys
+import json
+import datetime
+from datetime import timezone
 import traceback
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+import asyncio
+# ...existing code...
 
-# Auto-dependency installer
 def check_and_install_dependencies():
-    """Check for missing dependencies and install them automatically."""
     required_packages = [
-        'langgraph', 'langchain', 'langchain_core', 'langchain_community',
-        'behave', 'requests', 'jsonpath_ng', 'pydantic', 'aiofiles',
-        'dotenv', 'typing_extensions'
+        'langgraph', 'langchain', 'langchain_core', 'langchain_community', 'behave', 'requests', 'jsonpath_ng', 'pydantic', 'aiofiles', 'dotenv', 'typing_extensions'
     ]
-
     missing_packages = []
+    import sys
     for package in required_packages:
         try:
             __import__(package)
         except ImportError:
             missing_packages.append(package)
+    if missing_packages:
+        print(f"🔧 Missing packages detected: {', '.join(missing_packages)}")
+        print("Installing missing dependencies...")
+        try:
+            import subprocess
+            for package in missing_packages:
+                package_map = {
+                    'langgraph': 'langgraph==0.2.35',
+                    'langchain': 'langchain==0.2.12',
+                    'langchain_core': 'langchain-core==0.3.25',
+                    'langchain_community': 'langchain-community==0.3.25',
+                    'behave': 'behave==1.2.6',
+                    'requests': 'requests==2.32.3',
+                    'jsonpath_ng': 'jsonpath-ng==1.6.0',
+                    'pydantic': 'pydantic==2.8.2',
+                    'aiofiles': 'aiofiles==24.1.0',
+                    'dotenv': 'python-dotenv==1.0.1',
+                    'typing_extensions': 'typing-extensions==4.12.2'
+                }
+                install_cmd = package_map.get(package, package)
+                print(f"Installing {install_cmd}...")
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", install_cmd],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                print(f"✓ Successfully installed {package}")
+        except Exception as e:
+            print(f"❌ Failed to install dependencies automatically: {e}")
+            print("Please run: pip install -r utility/requirements.txt")
+            sys.exit(1)
+        print("✅ Dependencies installed successfully!")
+    parser = argparse.ArgumentParser(description="Telecom AI LangGraph Main Entry Point")
+    parser.add_argument('--config', type=str, default=None, help='Path to config file')
+    parser.add_argument('--max-healing', type=int, default=5, help='Max healing attempts')
+    parser.add_argument('--disable-auto-healing', action='store_true', help='Disable auto healing')
+    parser.add_argument('--output-dir', type=str, default=None, help='Output directory')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--recursion-limit', type=int, default=100, help='Recursion limit')
+    parser.add_argument('--fail-fast', action='store_true', help='Stop on first failure')
+    parser.add_argument('--user-story', type=str, default=None, help='User story for test generation')
+    parser.add_argument('user_story_positional', nargs='?', default=None, help='User story (positional)')
+    args = parser.parse_args()
+
+    # ...existing code...
+    user_story = args.user_story or args.user_story_positional
+    # Pass user_story to orchestrator/agents as needed
+    # ...existing code...
+    try:
+        __import__(package)
+    except ImportError:
+        missing_packages.append(package)
 
     if missing_packages:
         print(f"🔧 Missing packages detected: {', '.join(missing_packages)}")
@@ -175,7 +224,7 @@ def create_initial_state(args: argparse.Namespace) -> AgentState:
         "healing_attempts": 0,
         "healing_types": [],
         "current_step": "STARTUP",
-        "execution_trail": [{"timestamp": datetime.now(timezone.utc).isoformat(), "step": "INIT", "status": "STARTED"}],
+        "execution_trail": [{"timestamp": datetime.datetime.now(timezone.utc).isoformat(), "step": "INIT", "status": "STARTED"}],
         "diagnosed": False,
         "error_type": None,
         "error_specifics": {},
@@ -203,7 +252,7 @@ def create_workflow():
     def tracked_agent(name):
         async def run_tracked(state: AgentState) -> dict:
             state["current_step"] = name
-            state["execution_trail"].append({"timestamp": datetime.now(timezone.utc).isoformat(), "step": name, "status": "STARTED"})
+            state["execution_trail"].append({"timestamp": datetime.datetime.now(timezone.utc).isoformat(), "step": name, "status": "STARTED"})
             logger.info("[START] STEP: %s", name)
             try:
                 result = await agent_classes[name].run(state)
@@ -335,10 +384,22 @@ async def run_main_workflow(initial_state: AgentState, recursion_limit: int = 15
 
 
 if __name__ == "__main__":
+    # Dependency check and install before main workflow
+    try:
+        from utility.dependency_installer import DependencyInstaller
+        installer = DependencyInstaller()
+        success = installer.run()
+        if not success:
+            print("❌ Dependency installation failed. Exiting.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"❌ Dependency check failed: {e}")
+        sys.exit(1)
+
     args = parse_arguments()
     banner = f"""
     ============================================================
-    TELECOM TEST AUTOMATION | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    TELECOM TEST AUTOMATION | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     User Story: {args.user_story}
     Configuration: {args.config}
     Max Healing Attempts: {args.max_healing}
@@ -355,7 +416,6 @@ if __name__ == "__main__":
     try:
         initial_state = create_initial_state(args)
         final_state = loop.run_until_complete(asyncio.wait_for(run_main_workflow(initial_state, recursion_limit=args.recursion_limit), timeout=600))
-        
         # Check for critical failures
         if final_state.get("critical_failure", False):
             exit_code = final_state.get("exit_code", 1)
@@ -385,5 +445,5 @@ if __name__ == "__main__":
         exit_code = 4
     finally:
         loop.close()
-        logger.info("Execution completed at: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        logger.info("Execution completed at: %s", datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         sys.exit(exit_code)

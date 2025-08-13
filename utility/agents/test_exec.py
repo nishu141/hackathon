@@ -1,9 +1,11 @@
 import os
 import re
 import json
+import sys
 import asyncio
 import logging
-from typing import Dict, Any, List
+import subprocess
+from typing import Dict, Any, List, Tuple
 from datetime import datetime
 from .base_agent import BaseAgent
 
@@ -12,6 +14,21 @@ class TestExecAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger(__name__)
+
+    def _run_behave_tests(self, feature_path: str) -> tuple[int, str]:
+        """Execute behave tests using subprocess."""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "behave", feature_path, "--no-capture", "--format=plain"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            return result.returncode, result.stdout + result.stderr
+        except subprocess.CalledProcessError as e:
+            return e.returncode, e.output
+        except Exception as e:
+            return 1, str(e)
 
     def _parse_behave_output(self, output: str, return_code: int) -> List[Dict[str, Any]]:
         """Parse behave output to extract detailed scenario results."""
@@ -234,56 +251,46 @@ class TestExecAgent(BaseAgent):
             }
 
     async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute tests and report initial results"""
-        self.logger.info("🚀 TestExecAgent: Starting test execution")
+        """Execute Behave tests and analyze results."""
         
-        orchestrator = state["orchestrator"]
+        # Get paths from state
         feature_path = state.get("feature_path")
-        
-        if not feature_path:
-            self.logger.error("❌ No feature path provided for test execution")
-            state["test_execution_status"] = "failed"
-            state["test_execution_error"] = "No feature path available"
+        steps_path = state.get("step_definitions_path")
+        if not feature_path or not steps_path:
+            self.logger.error("❌ No feature file or step definitions path provided")
+            state["error"] = "Missing required paths"
             return state
+            
+        # Ensure only one step definitions file exists
+        steps_dir = os.path.dirname(steps_path)
+        for file in os.listdir(steps_dir):
+            if file.endswith('.py') and file != os.path.basename(steps_path):
+                os.remove(os.path.join(steps_dir, file))
+                self.logger.info(f"Removed duplicate step file: {file}")
+                
+        # Run Behave tests
+        return_code, output = self._run_behave_tests(feature_path)
         
-        try:
-            # Execute test with retry limit
-            success, output = await orchestrator.execute_test(feature_path)
-            
-            # Always store raw output
-            state["test_output"] = output
-            
-            # Parse scenario results from output (best-effort)
-            scenario_results = self._parse_behave_output(output, 0 if success else 1)
-            state["scenario_results"] = scenario_results
-            
-            if success:
-                self.logger.info("✅ Test execution completed successfully")
-                state["test_execution_status"] = "success"
-                state["healing_type"] = None
-            else:
-                self.logger.warning("⚠️ Test execution failed, analyzing failures...")
-                state["test_execution_status"] = "failed"
-                
-                # Analyze failures to determine healing strategy
-                failure_analysis = self._analyze_test_failures(output)
-                state["failure_analysis"] = failure_analysis
-                
-                # Set healing type based on analysis
-                if failure_analysis["needs_healing"]:
-                    state["healing_type"] = failure_analysis["recommended_healing"]
-                    self.logger.info(f"🔧 Recommended healing: {failure_analysis['recommended_healing']}")
-                    
-                    if failure_analysis["critical_issues"]:
-                        self.logger.error(f"🚨 Critical issues detected: {failure_analysis['critical_issues']}")
-                else:
-                    state["healing_type"] = None
-                    self.logger.info("ℹ️ No healing required or healing not possible")
-                
-        except Exception as e:
-            self.logger.error(f"💥 Test execution error: {e}")
-            state["test_execution_status"] = "error"
-            state["test_execution_error"] = str(e)
-            state["healing_type"] = "generic_repair"
+        # Parse test results
+        test_results = self._parse_behave_output(output, return_code)
+        
+        # Update state
+        state.update({
+            "test_executed": True,
+            "test_exec_result": {
+                "return_code": return_code,
+                "output": output
+            },
+            "test_passed": return_code == 0,
+            "scenario_results": test_results,
+            "needs_self_heal": return_code != 0,
+            "healing_attempts": state.get("healing_attempts", 0),
+            "healing_types": [],
+            "syntax_healed": False,
+            "runtime_healed": False,
+            "error_type": "execution_error" if return_code != 0 else None,
+            "error_details": output if return_code != 0 else None,
+            "error_specifics": test_results if return_code != 0 else None
+        })
         
         return state
