@@ -292,7 +292,7 @@ def create_workflow():
         # Check for critical failures that should stop execution
         if results:
             critical_failures = [r for r in results if not r.get("passed", True) and 
-                               r.get("error_type") in ["SyntaxError", "ImportError", "FileSystemError", "ValidationError"]]
+                               r.get("error_type") in ["SyntaxError", "ImportError", "FileSystemError", "ValidationError", "config_not_found", "connection_refused", "undefined_steps"]]
             if critical_failures:
                 print(f"🚨 Critical failures detected: {len(critical_failures)}")
                 return "validation"  # Go to validation to determine exit

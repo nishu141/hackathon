@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import re
 import json
@@ -9,30 +11,242 @@ from typing import Dict, Any, List, Tuple
 from datetime import datetime
 from .base_agent import BaseAgent
 
+__all__ = ['TestExecAgent']
+
 
 class TestExecAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger(__name__)
-
-    def _run_behave_tests(self, feature_path: str) -> tuple[int, str]:
-        """Execute behave tests using subprocess."""
+        self.execution_steps = []
+        self.step_timings = {}
+        
+    def _log_step(self, step_name: str, details: Dict[str, Any] = None):
+        """Log a step execution with timing and details"""
+        timestamp = datetime.now()
+        step_info = {
+            "step": step_name,
+            "timestamp": timestamp.isoformat(),
+            "details": details or {}
+        }
+        self.execution_steps.append(step_info)
+        self.step_timings[step_name] = timestamp
+        self.logger.info(f"Step: {step_name} - {json.dumps(details, indent=2) if details else 'No details'}")
+        
+    def _run_behave_tests(self, feature_path: str) -> tuple[int, str, List[Dict[str, Any]]]:
+        """Execute behave tests using subprocess with detailed logging."""
+        execution_log = []
         try:
+            # Log test start
+            start_time = datetime.now()
+            execution_log.append({
+                "timestamp": start_time.isoformat(),
+                "event": "test_start",
+                "details": {"feature_path": feature_path}
+            })
+            
+            # Check feature file exists
+            if not os.path.exists(feature_path):
+                execution_log.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "error",
+                    "details": {"error": f"Feature file not found: {feature_path}"}
+                })
+                return 1, f"Feature file not found: {feature_path}", execution_log
+            
+            # Log feature file content
+            try:
+                with open(feature_path, 'r') as f:
+                    feature_content = f.read()
+                    execution_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "feature_file_read",
+                        "details": {"content": feature_content}
+                    })
+            except Exception as e:
+                execution_log.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "error",
+                    "details": {"error": f"Failed to read feature file: {str(e)}"}
+                })
+            
+            # Execute behave with detailed output
+            command = [sys.executable, "-m", "behave", feature_path, 
+                      "--no-capture", "--format=plain", "--show-timings"]
+            
+            execution_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "event": "command_start",
+                "details": {"command": " ".join(command)}
+            })
+            
             result = subprocess.run(
-                [sys.executable, "-m", "behave", feature_path, "--no-capture", "--format=plain"],
+                command,
                 capture_output=True,
                 text=True,
                 check=False
             )
-            return result.returncode, result.stdout + result.stderr
+            
+            output = result.stdout + result.stderr
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            # Log execution details
+            execution_log.append({
+                "timestamp": end_time.isoformat(),
+                "event": "command_complete",
+                "details": {
+                    "return_code": result.returncode,
+                    "duration": duration,
+                    "output": output
+                }
+            })
+            
+            self.logger.info("=" * 80)
+            self.logger.info(f"Test Execution Summary:")
+            self.logger.info(f"Feature: {feature_path}")
+            self.logger.info(f"Duration: {duration:.2f} seconds")
+            self.logger.info(f"Return Code: {result.returncode}")
+            self.logger.info("=" * 80)
+            self.logger.info("Detailed Output:")
+            self.logger.info(output)
+            self.logger.info("=" * 80)
+            
+            return result.returncode, output, execution_log
+            
         except subprocess.CalledProcessError as e:
-            return e.returncode, e.output
+            error_details = f"Behave execution failed: {str(e)}"
+            execution_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "event": "error",
+                "details": {"error": error_details}
+            })
+            self.logger.error(error_details)
+            return e.returncode, e.output, execution_log
+            
         except Exception as e:
-            return 1, str(e)
+            error_details = f"Unexpected error during test execution: {str(e)}"
+            execution_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "event": "error",
+                "details": {"error": error_details}
+            })
+            self.logger.error(error_details)
+            return 1, str(e), execution_log
+
+    async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Run test execution with detailed step tracking"""
+        self._log_step("test_execution_start", {
+            "user_story": state.get("user_story"),
+            "feature_path": state.get("feature_path")
+        })
+        
+        # Initialize state with detailed execution tracking
+        start_time = datetime.now()
+        state.update({
+            "test_passed": False,
+            "test_executed": False,
+            "test_exec_result": None,
+            "scenario_results": [],
+            "needs_self_heal": False,
+            "error_type": None,
+            "error_details": None,
+            "error_specifics": {},
+            "current_step": "test_exec",
+            "execution_log": [],
+            "test_start_time": start_time.isoformat(),
+            "execution_steps": self.execution_steps,
+            "step_timings": self.step_timings
+        })
+        
+        # Log initial state
+        state["execution_log"].append({
+            "timestamp": state["test_start_time"],
+            "event": "execution_start",
+            "details": {
+                "user_story": state.get("user_story"),
+                "feature_path": state.get("feature_path"),
+                "step_definitions_path": state.get("step_definitions_path")
+            }
+        })
+        
+        # Validate project paths
+        if not state.get("feature_path"):
+            error_msg = "Feature file path not found"
+            state.update({
+                "error_type": "missing_path",
+                "error_details": error_msg,
+                "execution_log": state["execution_log"] + [{
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "error",
+                    "details": {"error": error_msg}
+                }]
+            })
+            return state
+        
+        # Run behave tests with detailed logging
+        exit_code, output, test_execution_log = self._run_behave_tests(state["feature_path"])
+        state["execution_log"].extend(test_execution_log)
+        
+        # Parse results and analyze failures with detailed logging
+        scenario_results = self._parse_behave_output(output, exit_code)
+        
+        # Log parsing results
+        state["execution_log"].append({
+            "timestamp": datetime.now().isoformat(),
+            "event": "results_parsed",
+            "details": {
+                "num_scenarios": len(scenario_results),
+                "scenarios": scenario_results
+            }
+        })
+        
+        # Add failure analysis
+        error_patterns = {
+            "config_not_found": (r"No such file or directory: .*telecom_config\.json", "Configuration file not found"),
+            "connection_refused": (r"Connection refused.*localhost:8000", "SMS API service not running"),
+            "undefined_steps": (r"undefined.*step", "Missing step definitions"),
+            "syntax_error": (r"SyntaxError", "Python syntax error in test files"),
+            "assertion_error": (r"AssertionError", "Test assertion failed"),
+            "import_error": (r"ImportError|ModuleNotFoundError", "Missing Python module")
+        }
+        
+        # Analyze failures
+        failure_analysis = {
+            "failure_type": "unknown",
+            "critical_issues": [],
+            "needs_healing": True,
+            "error_type": None,
+            "error_details": None
+        }
+        
+        # Check for error patterns
+        for error_type, (pattern, desc) in error_patterns.items():
+            if re.search(pattern, output, re.IGNORECASE):
+                failure_analysis["failure_type"] = error_type
+                failure_analysis["critical_issues"].append(desc)
+                failure_analysis["error_type"] = error_type
+                failure_analysis["error_details"] = desc
+                break
+        
+        # Update state with results
+        state.update({
+            "test_output": output,
+            "test_executed": True,
+            "test_passed": exit_code == 0,
+            "test_exec_result": exit_code,
+            "scenario_results": scenario_results,
+            "failure_analysis": failure_analysis,
+            "needs_self_heal": exit_code != 0,
+            "error_type": failure_analysis.get("error_type", "test_failure") if exit_code != 0 else None,
+            "error_details": failure_analysis.get("error_details", output) if exit_code != 0 else None
+        })
+        
+        return state
 
     def _parse_behave_output(self, output: str, return_code: int) -> List[Dict[str, Any]]:
         """Parse behave output to extract detailed scenario results."""
-        results: List[Dict[str, Any]] = []
+        results = []
         
         # Check if behave command failed completely
         if return_code != 0:
@@ -112,8 +326,8 @@ class TestExecAgent(BaseAgent):
                     current_scenario["error_details"] = line
                     # Mark the last step as failed
                     if current_scenario["steps"]:
-                        current_scenario["steps"][ -1 ]["status"] = "failed"
-                        current_scenario["steps"][ -1 ]["details"] = line
+                        current_scenario["steps"][-1]["status"] = "failed"
+                        current_scenario["steps"][-1]["details"] = line
             
             # Detect other errors
             elif "ERROR:" in line or "FAILED:" in line:
@@ -142,155 +356,3 @@ class TestExecAgent(BaseAgent):
                 })
         
         return results
-
-    def _validate_test_environment(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate that the test environment is properly set up."""
-        validation_result = {
-            "valid": True,
-            "issues": [],
-            "warnings": []
-        }
-        
-        orchestrator = state["orchestrator"]
-        output_dir = orchestrator.output_dir
-        
-        # Check if framework directories exist
-        required_dirs = ["features", "steps", "support"]  # behave expects "steps" directory
-        for dir_name in required_dirs:
-            dir_path = os.path.join(output_dir, dir_name)
-            if not os.path.exists(dir_path):
-                validation_result["valid"] = False
-                validation_result["issues"].append(f"Missing directory: {dir_name}")
-        
-        # Check if feature file exists
-        feature_path = state.get("feature_path", "")
-        if not feature_path or not os.path.exists(feature_path):
-            validation_result["valid"] = False
-            validation_result["issues"].append(f"Feature file not found: {feature_path}")
-        
-        # Check if step definitions exist
-        steps_dir = os.path.join(output_dir, "steps")  # behave expects "steps" directory
-        if os.path.exists(steps_dir):
-            step_files = [f for f in os.listdir(steps_dir) if f.endswith('.py')]
-            if not step_files:
-                validation_result["warnings"].append("No step definition files found")
-        else:
-            validation_result["valid"] = False
-            validation_result["issues"].append("Missing steps directory")
-        
-        # Check if behave is available
-        try:
-            import behave
-            validation_result["behave_available"] = True
-        except ImportError:
-            validation_result["valid"] = False
-            validation_result["issues"].append("behave package not available")
-        
-        return validation_result
-
-    def _analyze_test_failures(self, output: str) -> Dict[str, Any]:
-        """Analyze test output to determine failure patterns and healing strategies"""
-        output_lower = output.lower()
-        
-        # Check for specific error types
-        if "ambiguousstep" in output_lower or "ambiguous step" in output_lower:
-            return {
-                "needs_healing": True,
-                "recommended_healing": "ambiguous_step_repair",
-                "failure_type": "ambiguous_step",
-                "critical_issues": ["Duplicate step definitions detected"],
-                "recommendations": ["Clean up old step definition files", "Regenerate step definitions"]
-            }
-        elif "syntaxerror" in output_lower or "syntax error" in output_lower:
-            return {
-                "needs_healing": True,
-                "recommended_healing": "syntax_repair",
-                "failure_type": "syntax",
-                "critical_issues": ["Generated code has syntax errors"],
-                "recommendations": ["Regenerate feature and step definitions", "Validate code syntax"]
-            }
-        elif "importerror" in output_lower or "module not found" in output_lower:
-            return {
-                "needs_healing": True,
-                "recommended_healing": "import_repair",
-                "failure_type": "import",
-                "critical_issues": ["Required modules not available"],
-                "recommendations": ["Install missing dependencies", "Check import paths"]
-            }
-        elif "assertionerror" in output_lower or "assertion failed" in output_lower:
-            return {
-                "needs_healing": True,
-                "recommended_healing": "assertion_repair",
-                "failure_type": "assertion",
-                "critical_issues": ["Test assertions are failing"],
-                "recommendations": ["Review test logic", "Update step definitions"]
-            }
-        elif "timeout" in output_lower or "timed out" in output_lower:
-            return {
-                "needs_healing": True,
-                "recommended_healing": "timeout_repair",
-                "failure_type": "timeout",
-                "critical_issues": ["Test execution is timing out"],
-                "recommendations": ["Increase timeout limits", "Check system performance"]
-            }
-        elif "max retries" in output_lower or "retry limit" in output_lower:
-            return {
-                "needs_healing": False,
-                "recommended_healing": None,
-                "failure_type": "retry_limit_exceeded",
-                "critical_issues": ["Self-healing retry limit reached"],
-                "recommendations": ["Manual intervention required", "Review system configuration"]
-            }
-        else:
-            return {
-                "needs_healing": True,
-                "recommended_healing": "generic_repair",
-                "failure_type": "unknown",
-                "critical_issues": ["Unknown failure pattern"],
-                "recommendations": ["Generic repair attempt", "Review logs for details"]
-            }
-
-    async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute Behave tests and analyze results."""
-        
-        # Get paths from state
-        feature_path = state.get("feature_path")
-        steps_path = state.get("step_definitions_path")
-        if not feature_path or not steps_path:
-            self.logger.error("❌ No feature file or step definitions path provided")
-            state["error"] = "Missing required paths"
-            return state
-            
-        # Ensure only one step definitions file exists
-        steps_dir = os.path.dirname(steps_path)
-        for file in os.listdir(steps_dir):
-            if file.endswith('.py') and file != os.path.basename(steps_path):
-                os.remove(os.path.join(steps_dir, file))
-                self.logger.info(f"Removed duplicate step file: {file}")
-                
-        # Run Behave tests
-        return_code, output = self._run_behave_tests(feature_path)
-        
-        # Parse test results
-        test_results = self._parse_behave_output(output, return_code)
-        
-        # Update state
-        state.update({
-            "test_executed": True,
-            "test_exec_result": {
-                "return_code": return_code,
-                "output": output
-            },
-            "test_passed": return_code == 0,
-            "scenario_results": test_results,
-            "needs_self_heal": return_code != 0,
-            "healing_attempts": state.get("healing_attempts", 0),
-            "healing_types": [],
-            "syntax_healed": False,
-            "runtime_healed": False,
-            "error_type": "execution_error" if return_code != 0 else None,
-            "error_details": output if return_code != 0 else None,
-            "error_specifics": test_results if return_code != 0 else None
-        })
-        
-        return state
